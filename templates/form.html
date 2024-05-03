@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@^2.0/dist/tailwind.min.css" rel="stylesheet">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>Ansible Vault Encryptor</title>
+    <script src="https://unpkg.com/htmx.org"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+    <div class="container mx-auto px-4">
+        <div id="form-container" class="bg-white rounded shadow p-6">
+            <form hx-post="/encrypt" hx-target="#result-container" class="space-y-4">
+                <div>
+                    <label for="text" class="block text-sm font-medium text-gray-700">Text to Encrypt:</label>
+                    <textarea id="text" name="text" class="mt-1 block w-2/3 border-gray-300 rounded-md shadow-sm"></textarea>
+                </div>
+                <div class="flex justify-between">
+                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+                        Encrypt
+                    </button>
+                    <button type="button" hx-get="/clear" hx-target="#form-container" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
+                        Clear
+                    </button>
+                </div>
+            </form>
+
+            <!-- Dynamic content area for encryption results -->
+            <div id="result-container">
+                <!-- HTMX will replace this with encrypted text and copy button -->
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/main.js"></script>
+</body>
+</html>
+

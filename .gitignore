@@ -1,0 +1,7 @@
+# Ignore the nginx and systemd folders
+nginx/
+systemd/
+
+# Ignore macOS files
+.DS_Store
+
