@@ -6,42 +6,66 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/semconv/v1.21.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
+var tracer trace.Tracer
+
 func main() {
+	// Initialize logging
+	log.Println("Starting the server...")
+
+	// Set up OpenTelemetry tracing
+	shutdown := initTracer()
+	defer shutdown()
+
+	// Create an instrumented HTTP mux
 	mux := http.NewServeMux()
 
-	// Static file handlers (ensure no method prefix is used here)
-	mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("./assets"))))
-	mux.Handle("/js/", http.StripPrefix("/js/", http.FileServer(http.Dir("./js"))))
+	// Static file handlers
+	mux.Handle("/assets/", otelhttp.NewHandler(http.StripPrefix("/assets/", http.FileServer(http.Dir("./assets"))), "Static Assets"))
+	mux.Handle("/js/", otelhttp.NewHandler(http.StripPrefix("/js/", http.FileServer(http.Dir("./js"))), "JavaScript Files"))
 
 	// Route handlers
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", otelhttp.NewHandler(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
+			log.Println("Serving form.html")
 			http.ServeFile(w, r, "templates/form.html")
 		} else {
+			log.Println("Not Found")
 			http.NotFound(w, r)
 		}
-	})
+	}, "Main Page").ServeHTTP)
 
-	mux.HandleFunc("POST /encrypt", handleEncryption)
-	mux.HandleFunc("POST /api/encrypt", handleAPIEncryption)
-
-	mux.HandleFunc("GET /clear", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /encrypt", otelhttp.NewHandler(handleEncryption, "Encryption Handler").ServeHTTP)
+	mux.HandleFunc("POST /api/encrypt", otelhttp.NewHandler(handleAPIEncryption, "API Encryption Handler").ServeHTTP)
+	mux.HandleFunc("GET /clear", otelhttp.NewHandler(func(w http.ResponseWriter, r *http.Request) {
+		log.Println("Serving form.html (clear)")
 		http.ServeFile(w, r, "templates/form.html")
-	})
+	}, "Clear Page").ServeHTTP)
 
 	// Start server
-	http.ListenAndServe(":8080", mux)
+	log.Println("Server started on http://localhost:8080")
+	http.ListenAndServe(":8080", otelhttp.NewHandler(mux, "HTTP Server"))
 }
 
 func handleEncryption(w http.ResponseWriter, r *http.Request) {
 	textToEncrypt := r.FormValue("text")
 	encryptedText, err := encryptText(textToEncrypt)
 	if err != nil {
+		log.Printf("Error encrypting text: %v", err)
 		http.Error(w, "Error encrypting text: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -53,12 +77,14 @@ func handleAPIEncryption(w http.ResponseWriter, r *http.Request) {
 		Text string `json:"text"`
 	}
 	if err := decodeJSONBody(r, &requestData); err != nil {
+		log.Println("Invalid request payload")
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
 
 	encryptedText, err := encryptText(requestData.Text)
 	if err != nil {
+		log.Printf("Error encrypting text: %v", err)
 		http.Error(w, "Error encrypting text", http.StatusInternalServerError)
 		return
 	}
@@ -109,10 +135,12 @@ func formatHashOutput(hashedText string) string {
 func renderHTML(w http.ResponseWriter, templatePath string, data map[string]string) {
 	tmpl, err := template.ParseFiles(templatePath)
 	if err != nil {
+		log.Printf("Unable to load template: %v", err)
 		http.Error(w, "Unable to load template", http.StatusInternalServerError)
 		return
 	}
 	if err := tmpl.Execute(w, data); err != nil {
+		log.Printf("Unable to render template: %v", err)
 		http.Error(w, "Unable to render template", http.StatusInternalServerError)
 	}
 }
@@ -121,4 +149,34 @@ func decodeJSONBody(r *http.Request, dest interface{}) error {
 	defer r.Body.Close()
 	decoder := json.NewDecoder(r.Body)
 	return decoder.Decode(dest)
+}
+
+func initTracer() func() {
+	// Create a new exporter
+	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	if err != nil {
+		log.Fatalf("failed to initialize stdouttrace exporter: %v", err)
+	}
+
+	// Create a resource for the service
+	resource := resource.NewWithAttributes(
+		semconv.SchemaURL,
+		semconv.ServiceName("Ansible Vault Encryptor"),
+		semconv.ServiceVersion("1.0.0"),
+	)
+
+	// Create a tracer provider
+	tp := trace.NewTracerProvider(
+		trace.WithBatcher(exporter),
+		trace.WithResource(resource),
+	)
+
+	otel.SetTracerProvider(tp)
+	tracer = tp.Tracer("ansible-vault-encryptor")
+
+	return func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Fatalf("Error shutting down tracer provider: %v", err)
+		}
+	}
 }
