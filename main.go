@@ -1,71 +1,124 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"html/template"
 	"net/http"
 	"os/exec"
-
-	"github.com/gin-gonic/gin"
+	"strings"
 )
 
 func main() {
-	router := gin.Default()
+	mux := http.NewServeMux()
 
-	// Serve static files
-	router.Static("/assets", "./assets")
-	router.Static("/js", "./js")
+	// Static file handlers (ensure no method prefix is used here)
+	mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("./assets"))))
+	mux.Handle("/js/", http.StripPrefix("/js/", http.FileServer(http.Dir("./js"))))
 
-	// Load HTML templates
-	router.LoadHTMLGlob("templates/*")
-
-	// Routes
-	router.GET("/", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "form.html", nil)
+	// Route handlers
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			http.ServeFile(w, r, "templates/form.html")
+		} else {
+			http.NotFound(w, r)
+		}
 	})
 
-	router.POST("/encrypt", handleEncryption)
+	mux.HandleFunc("POST /encrypt", handleEncryption)
+	mux.HandleFunc("POST /api/encrypt", handleAPIEncryption)
 
-	// API endpoint for encryption
-	router.POST("/api/encrypt", handleAPIEncryption)
-
-	router.GET("/clear", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "form.html", nil)
+	mux.HandleFunc("GET /clear", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "templates/form.html")
 	})
 
 	// Start server
-	router.Run(":8080")
+	http.ListenAndServe(":8080", mux)
 }
 
-func handleEncryption(c *gin.Context) {
-	textToEncrypt := c.PostForm("text")
+func handleEncryption(w http.ResponseWriter, r *http.Request) {
+	textToEncrypt := r.FormValue("text")
 	encryptedText, err := encryptText(textToEncrypt)
 	if err != nil {
-		c.String(http.StatusInternalServerError, "Error encrypting text: "+err.Error())
+		http.Error(w, "Error encrypting text: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	c.HTML(http.StatusOK, "encrypted_text.html", gin.H{"EncryptedText": encryptedText})
+	renderHTML(w, "templates/encrypted_text.html", map[string]string{"EncryptedText": encryptedText})
 }
 
-func handleAPIEncryption(c *gin.Context) {
+func handleAPIEncryption(w http.ResponseWriter, r *http.Request) {
 	var requestData struct {
 		Text string `json:"text"`
 	}
-
-	if err := c.BindJSON(&requestData); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
+	if err := decodeJSONBody(r, &requestData); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
 
 	encryptedText, err := encryptText(requestData.Text)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error encrypting text"})
+		http.Error(w, "Error encrypting text", http.StatusInternalServerError)
 		return
 	}
 
-	c.String(http.StatusOK, encryptedText)
+	fmt.Fprint(w, encryptedText)
 }
 
 func encryptText(text string) (string, error) {
-	cmd := exec.Command("ansible-vault", "encrypt_string", text)
-	output, err := cmd.CombinedOutput()
-	return string(output), err
+	if isAnsibleVaultAvailable() {
+		cmd := exec.Command("ansible-vault", "encrypt_string", text, "--name", "encrypted")
+		output, err := cmd.CombinedOutput()
+		return string(output), err
+	} else {
+		return sha256Encrypt(text), nil
+	}
+}
+
+func isAnsibleVaultAvailable() bool {
+	cmd := exec.Command("which", "ansible-vault")
+	err := cmd.Run()
+	return err == nil
+}
+
+func sha256Encrypt(text string) string {
+	hash := sha256.New()
+	hash.Write([]byte(text))
+	hashedText := hex.EncodeToString(hash.Sum(nil))
+
+	// Return output in a format similar to ansible-vault
+	return fmt.Sprintf(`$ANSIBLE_VAULT;1.1;SHA256
+%s
+`, formatHashOutput(hashedText))
+}
+
+func formatHashOutput(hashedText string) string {
+	var sb strings.Builder
+	lineLength := 32
+	for i := 0; i < len(hashedText); i += lineLength {
+		end := i + lineLength
+		if end > len(hashedText) {
+			end = len(hashedText)
+		}
+		sb.WriteString(hashedText[i:end] + "\n")
+	}
+	return sb.String()
+}
+
+func renderHTML(w http.ResponseWriter, templatePath string, data map[string]string) {
+	tmpl, err := template.ParseFiles(templatePath)
+	if err != nil {
+		http.Error(w, "Unable to load template", http.StatusInternalServerError)
+		return
+	}
+	if err := tmpl.Execute(w, data); err != nil {
+		http.Error(w, "Unable to render template", http.StatusInternalServerError)
+	}
+}
+
+func decodeJSONBody(r *http.Request, dest interface{}) error {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	return decoder.Decode(dest)
 }

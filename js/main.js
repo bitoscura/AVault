@@ -38,7 +38,7 @@ function clearText() {
     textArea.value = '';
     const encryptedTextElement = document.getElementById('encryptedText');
     if (encryptedTextElement) {
-        encryptedTextElement.textContent = ''; // Clear the encrypted text
+        encryptedTextElement.value = ''; // Clear the encrypted text
         encryptedTextElement.style.display = 'none'; // Hide the encrypted text area
     }
     const copyButton = document.getElementById('copyButton');
