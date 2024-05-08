@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,7 +9,6 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -18,10 +18,9 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/semconv/v1.21.0"
-	"go.opentelemetry.io/otel/trace"
 )
 
-var tracer trace.Tracer
+var tracer = otel.Tracer("ansible-vault-encryptor")
 
 func main() {
 	// Initialize logging
@@ -39,7 +38,7 @@ func main() {
 	mux.Handle("/js/", otelhttp.NewHandler(http.StripPrefix("/js/", http.FileServer(http.Dir("./js"))), "JavaScript Files"))
 
 	// Route handlers
-	mux.HandleFunc("/", otelhttp.NewHandler(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/", otelhttp.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			log.Println("Serving form.html")
 			http.ServeFile(w, r, "templates/form.html")
@@ -47,14 +46,14 @@ func main() {
 			log.Println("Not Found")
 			http.NotFound(w, r)
 		}
-	}, "Main Page").ServeHTTP)
+	}), "Main Page"))
 
-	mux.HandleFunc("POST /encrypt", otelhttp.NewHandler(handleEncryption, "Encryption Handler").ServeHTTP)
-	mux.HandleFunc("POST /api/encrypt", otelhttp.NewHandler(handleAPIEncryption, "API Encryption Handler").ServeHTTP)
-	mux.HandleFunc("GET /clear", otelhttp.NewHandler(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /encrypt", otelhttp.NewHandler(http.HandlerFunc(handleEncryption), "Encryption Handler"))
+	mux.Handle("POST /api/encrypt", otelhttp.NewHandler(http.HandlerFunc(handleAPIEncryption), "API Encryption Handler"))
+	mux.Handle("GET /clear", otelhttp.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Println("Serving form.html (clear)")
 		http.ServeFile(w, r, "templates/form.html")
-	}, "Clear Page").ServeHTTP)
+	}), "Clear Page"))
 
 	// Start server
 	log.Println("Server started on http://localhost:8080")
